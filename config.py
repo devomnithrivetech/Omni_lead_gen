@@ -5,9 +5,18 @@ load_dotenv()
 
 # --- API Keys ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-SNOV_USER_ID = os.getenv("SNOV_USER_ID", "")
-SNOV_API_SECRET = os.getenv("SNOV_API_SECRET", "")
-HUNTER_API_KEY = os.getenv("HUNTER_API_KEY", "")
+
+# Multiple Hunter.io API keys - rotate through them (25 credits each)
+# Add as HUNTER_API_KEY_1, HUNTER_API_KEY_2, etc. in .env
+HUNTER_API_KEYS = []
+for i in range(1, 20):
+    key = os.getenv("HUNTER_API_KEY_" + str(i), "")
+    if key:
+        HUNTER_API_KEYS.append(key)
+# Also support single key for backward compat
+single_key = os.getenv("HUNTER_API_KEY", "")
+if single_key and single_key not in HUNTER_API_KEYS:
+    HUNTER_API_KEYS.insert(0, single_key)
 
 # --- Scraper Settings ---
 SEARCH_QUERIES = [
@@ -25,7 +34,6 @@ SEARCH_QUERIES = [
     "Full Stack AI Developer",
 ]
 
-# Regions to search: USA + major European markets
 SEARCH_LOCATIONS = [
     "United States",
     "United Kingdom",
@@ -49,9 +57,7 @@ SEARCH_LOCATIONS = [
 # LinkedIn time filter: r86400=24h, r259200=72h, r604800=1week
 TIME_FILTER = "r86400"  # Past 24 hours
 
-MAX_PAGES_PER_QUERY = 2  # Each page ~ 25 jobs
-
-# --- Anti-Detection Settings ---
+MAX_PAGES_PER_QUERY = 2
 MIN_DELAY = 4
 MAX_DELAY = 10
 MAX_LEADS_PER_RUN = 500
@@ -59,7 +65,6 @@ MAX_LEADS_PER_RUN = 500
 # --- Enricher Settings ---
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
-# Decision maker titles to look for
 TARGET_TITLES = [
     "CTO", "Chief Technology Officer",
     "CEO", "Chief Executive Officer",
@@ -84,19 +89,15 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "leads.db")
 
 
 def check_keys():
-    keys = {
-        "GROQ_API_KEY": bool(GROQ_API_KEY),
-        "SNOV_USER_ID": bool(SNOV_USER_ID),
-        "SNOV_API_SECRET": bool(SNOV_API_SECRET),
-        "HUNTER_API_KEY": bool(HUNTER_API_KEY),
-    }
     print("")
     print("--- API Key Status ---")
-    for name, loaded in keys.items():
-        status = "OK" if loaded else "MISSING (optional)"
-        print("  " + name + ": " + status)
+    print("  GROQ_API_KEY: " + ("OK" if GROQ_API_KEY else "MISSING"))
+    print("  HUNTER_API_KEYS: " + str(len(HUNTER_API_KEYS)) + " keys loaded")
+    for i, k in enumerate(HUNTER_API_KEYS):
+        print("    Key " + str(i + 1) + ": " + k[:8] + "..." + k[-4:])
+    total_credits = len(HUNTER_API_KEYS) * 25
+    print("  Total Hunter credits: ~" + str(total_credits) + "/month")
     print()
-    return keys
 
 
 if __name__ == "__main__":

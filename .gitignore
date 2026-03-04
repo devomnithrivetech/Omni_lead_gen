@@ -1,9 +1,8 @@
-venv/
-node_modules/
+venv
+node_modules
 .env
 leads.db
 leads_export.csv
 __pycache__/
 *.pyc
-package.json
-package-lock.json
+venv/

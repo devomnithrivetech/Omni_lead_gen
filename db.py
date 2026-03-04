@@ -20,8 +20,9 @@ def init_db():
             company_name TEXT NOT NULL,
             company_website TEXT,
             company_domain TEXT,
-            company_phone TEXT,
             company_contact_email TEXT,
+            company_description TEXT,
+            company_industry TEXT,
             job_title TEXT,
             job_description TEXT,
             job_url TEXT,
@@ -45,6 +46,16 @@ def init_db():
         CREATE UNIQUE INDEX IF NOT EXISTS idx_company_job
         ON leads(company_name, job_title)
     """)
+
+    # Add new columns if upgrading from old schema
+    for col_name, col_type in [
+        ("company_description", "TEXT"),
+        ("company_industry", "TEXT"),
+    ]:
+        try:
+            c.execute("ALTER TABLE leads ADD COLUMN " + col_name + " " + col_type)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
     conn.commit()
     conn.close()

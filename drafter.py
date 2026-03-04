@@ -8,7 +8,7 @@ SYSTEM_MSG = (
     "You are a B2B sales copywriter. You write short, "
     "direct, personalized cold emails. Always respond "
     "with valid JSON only, no markdown fences. "
-    "JSON keys must be: subject, email, linkedin_note"
+    'JSON keys must be: subject, email, linkedin_note'
 )
 
 
@@ -19,6 +19,8 @@ def build_prompt(lead):
         "",
         "TARGET COMPANY: " + lead["company_name"],
         "WEBSITE: " + str(lead.get("company_website", "")),
+        "ABOUT: " + str(lead.get("company_description", "")),
+        "INDUSTRY: " + str(lead.get("company_industry", "")),
         "HIRING FOR: " + lead["job_title"],
         "LOCATION: " + str(lead.get("job_location", "")),
         "",
@@ -63,12 +65,11 @@ def draft_email(lead):
         )
 
         raw = response.choices[0].message.content.strip()
-        lines_raw = raw.split("\n")
-        if lines_raw[0].startswith("```"):
-            lines_raw = lines_raw[1:]
-        if lines_raw and lines_raw[-1].strip() == "```":
-            lines_raw = lines_raw[:-1]
-        raw = "\n".join(lines_raw).strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1]
+        if raw.endswith("```"):
+            raw = raw.rsplit("```", 1)[0]
+        raw = raw.strip()
 
         result = json.loads(raw)
         return result
@@ -98,7 +99,7 @@ def run_drafter():
     for lead in leads:
         company = lead["company_name"]
         contact = str(lead.get("decision_maker_name", "Decision Maker"))
-        print("  Drafting for " + contact + " at " + company + "...")
+        print("  Drafting for " + contact + " at " + company + "...", end="")
 
         result = draft_email(lead)
 
@@ -111,9 +112,9 @@ def run_drafter():
                 status="drafted",
             )
             drafted += 1
-            print("    DONE: " + result.get("subject", "N/A"))
+            print(" DONE")
         else:
-            print("    FAILED")
+            print(" FAILED")
 
     print("Drafter done: " + str(drafted) + " emails drafted.")
     get_stats()
