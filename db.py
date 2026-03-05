@@ -28,6 +28,7 @@ def init_db():
             job_url TEXT,
             job_location TEXT,
             job_posted_date TEXT,
+            salary TEXT,
             decision_maker_name TEXT,
             decision_maker_title TEXT,
             decision_maker_email TEXT,
@@ -35,6 +36,7 @@ def init_db():
             draft_subject TEXT,
             draft_email TEXT,
             draft_linkedin_note TEXT,
+            tech_keywords TEXT,
             status TEXT DEFAULT 'scraped',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -51,6 +53,8 @@ def init_db():
     for col_name, col_type in [
         ("company_description", "TEXT"),
         ("company_industry", "TEXT"),
+        ("tech_keywords", "TEXT"),
+        ("salary", "TEXT"),
     ]:
         try:
             c.execute("ALTER TABLE leads ADD COLUMN " + col_name + " " + col_type)
@@ -64,16 +68,16 @@ def init_db():
 
 def insert_lead(company_name, job_title, job_description="",
                 job_url="", job_location="", company_domain="",
-                job_posted_date=""):
+                job_posted_date="", salary=""):
     conn = get_connection()
     try:
         conn.execute(
             """INSERT INTO leads
                (company_name, company_domain, job_title, job_description,
-                job_url, job_location, job_posted_date, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'scraped')""",
+                job_url, job_location, job_posted_date, salary, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'scraped')""",
             (company_name, company_domain, job_title,
-             job_description, job_url, job_location, job_posted_date)
+             job_description, job_url, job_location, job_posted_date, salary)
         )
         conn.commit()
         return True

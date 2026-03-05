@@ -5,15 +5,15 @@ load_dotenv()
 
 # --- API Keys ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyDOKtitH47nn4rZ4yJ0d0Jj5LDJbcQLGhs")
 
-# Multiple Hunter.io API keys - rotate through them (25 credits each)
-# Add as HUNTER_API_KEY_1, HUNTER_API_KEY_2, etc. in .env
+# Multiple Hunter.io API keys (optional, 25 free credits each)
 HUNTER_API_KEYS = []
-for i in range(1, 20):
+for i in range(1, 21):
     key = os.getenv("HUNTER_API_KEY_" + str(i), "")
     if key:
         HUNTER_API_KEYS.append(key)
-# Also support single key for backward compat
 single_key = os.getenv("HUNTER_API_KEY", "")
 if single_key and single_key not in HUNTER_API_KEYS:
     HUNTER_API_KEYS.insert(0, single_key)
@@ -54,9 +54,7 @@ SEARCH_LOCATIONS = [
     "Portugal",
 ]
 
-# LinkedIn time filter: r86400=24h, r259200=72h, r604800=1week
-TIME_FILTER = "r86400"  # Past 24 hours
-
+TIME_FILTER = "r86400"
 MAX_PAGES_PER_QUERY = 2
 MIN_DELAY = 4
 MAX_DELAY = 10
@@ -75,7 +73,6 @@ TARGET_TITLES = [
     "Chief AI Officer", "Head of Machine Learning",
 ]
 
-# --- Company Info for Outreach ---
 COMPANY_NAME = "Omnithrive Technologies"
 COMPANY_PITCH = (
     "Omnithrive Technologies builds and deploys custom AI solutions, "
@@ -84,19 +81,18 @@ COMPANY_PITCH = (
     "products in weeks instead of spending months hiring."
 )
 
-# --- Database ---
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "leads.db")
 
 
 def check_keys():
     print("")
-    print("--- API Key Status ---")
+    print("--- Config Status ---")
     print("  GROQ_API_KEY: " + ("OK" if GROQ_API_KEY else "MISSING"))
-    print("  HUNTER_API_KEYS: " + str(len(HUNTER_API_KEYS)) + " keys loaded")
-    for i, k in enumerate(HUNTER_API_KEYS):
-        print("    Key " + str(i + 1) + ": " + k[:8] + "..." + k[-4:])
-    total_credits = len(HUNTER_API_KEYS) * 25
-    print("  Total Hunter credits: ~" + str(total_credits) + "/month")
+    print("  ANTHROPIC_API_KEY: " + ("OK (fallback active)" if ANTHROPIC_API_KEY else "not set (no fallback)"))
+    if HUNTER_API_KEYS:
+        print("  HUNTER_API_KEYS: " + str(len(HUNTER_API_KEYS)) + " keys (~" + str(len(HUNTER_API_KEYS) * 25) + " credits)")
+    else:
+        print("  HUNTER_API_KEYS: none (free pipeline only)")
     print()
 
 

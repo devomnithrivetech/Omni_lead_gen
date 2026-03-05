@@ -14,10 +14,15 @@ EXPORT_COLUMNS = [
     ("company_industry", "Industry"),
     ("job_title", "Hiring For (Job Title)"),
     ("job_location", "Location"),
+    ("salary", "Salary"),
+    ("tech_keywords", "Tech Keywords"),
     ("decision_maker_name", "Decision Maker"),
     ("decision_maker_title", "DM Title"),
     ("decision_maker_email", "DM Email"),
     ("decision_maker_linkedin", "DM LinkedIn"),
+    ("job_description", "Job Description"),
+    ("draft_subject", "Email Subject"),
+    ("draft_email", "Draft Email"),
 ]
 
 
@@ -103,10 +108,15 @@ def export():
         "Industry": 18,
         "Hiring For (Job Title)": 30,
         "Location": 22,
+        "Salary": 25,
+        "Tech Keywords": 55,
         "Decision Maker": 22,
         "DM Title": 25,
         "DM Email": 30,
         "DM LinkedIn": 35,
+        "Job Description": 60,
+        "Email Subject": 45,
+        "Draft Email": 80,
     }
     for col_idx, (_, header) in enumerate(EXPORT_COLUMNS, 1):
         ws.column_dimensions[get_column_letter(col_idx)].width = col_widths.get(header, 20)
