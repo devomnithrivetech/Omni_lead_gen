@@ -220,13 +220,34 @@ def run():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
 
-    rows = conn.execute(
+    # Fetch all candidates, then pick ONE per company (best-quality lead).
+    # Skip any company that already has a drafted email on any of its rows.
+    all_candidates = conn.execute(
         """SELECT * FROM leads
            WHERE decision_maker_email IS NOT NULL
            AND decision_maker_email != ''
            AND (draft_email IS NULL OR draft_email = '')
+           AND company_name NOT IN (
+               SELECT DISTINCT company_name FROM leads
+               WHERE draft_email IS NOT NULL AND draft_email != ''
+           )
            ORDER BY company_name"""
     ).fetchall()
+
+    # Pick best row per company: score = DM name (3) + has JD (2) + has desc (1)
+    best_per_company = {}
+    for row in all_candidates:
+        r = dict(row)
+        key = r["company_name"]
+        score = (
+            (3 if (r.get("decision_maker_name") or "").strip() else 0) +
+            (2 if (r.get("job_description") or "").strip() else 0) +
+            (1 if (r.get("company_description") or "").strip() else 0)
+        )
+        if key not in best_per_company or score > best_per_company[key][0]:
+            best_per_company[key] = (score, r)
+
+    rows = [v[1] for v in sorted(best_per_company.values(), key=lambda x: x[1]["company_name"])]
 
     if not rows:
         print("All leads already have draft emails. Nothing to do.")
@@ -239,8 +260,7 @@ def run():
     done = 0
     failed = 0
 
-    for i, row in enumerate(rows):
-        lead = dict(row)
+    for i, lead in enumerate(rows):
         company = lead["company_name"]
         dm_name = (lead.get("decision_maker_name") or "").strip()
         prefix = "[" + str(i + 1) + "/" + str(total) + "] " + company

@@ -10,50 +10,47 @@ Run: python fill_job_data.py
 import sys
 import time
 import sqlite3
-from config import DB_PATH, ANTHROPIC_API_KEY, GEMINI_API_KEY
+from config import DB_PATH
 from scraper import scrape_job_description, extract_salary_from_text
+from ai_providers import generate as ai_generate
 
 
-def get_company_info_from_gemini(company_name, job_title, location=""):
-    """
-    Use Gemini to generate company description + industry when we have no JD.
-    Falls back gracefully if the API call fails.
-    """
-    try:
-        from google import genai
-        client = genai.Client(api_key=GEMINI_API_KEY)
-
-        loc_str = f" based in {location}" if location else ""
-        prompt = (
-            f"You are a business researcher. The company '{company_name}'{loc_str} "
-            f"is hiring for '{job_title}'.\n\n"
-            "Based on the company name and role they are hiring for, provide:\n"
-            "1. A concise 1-2 sentence description of what this company likely does\n"
-            "2. Their most likely industry (e.g. FinTech, Healthcare AI, SaaS, "
-            "Cybersecurity, EdTech, Logistics, Manufacturing, etc.)\n\n"
-            "Respond ONLY in this exact format (no extra text):\n"
-            "DESCRIPTION: <1-2 sentences>\n"
-            "INDUSTRY: <industry>"
-        )
-
-        response = client.models.generate_content(
-            model="gemini-2.0-flash-lite",
-            contents=prompt,
-        )
-        raw = response.text.strip()
-        desc, industry = "", ""
-        for line in raw.splitlines():
-            if line.startswith("DESCRIPTION:"):
-                desc = line.replace("DESCRIPTION:", "").strip()
-            elif line.startswith("INDUSTRY:"):
-                industry = line.replace("INDUSTRY:", "").strip()
-        return desc, industry
-    except Exception as e:
-        print(f" [Gemini err: {str(e)[:80]}]", end="")
-        return "", ""
+def _company_prompt(company_name, job_title, location=""):
+    loc_str = f" based in {location}" if location else ""
+    return (
+        f"You are a business researcher. The company '{company_name}'{loc_str} "
+        f"is hiring for '{job_title}'.\n\n"
+        "Based on the company name and role they are hiring for, provide:\n"
+        "1. A concise 1-2 sentence description of what this company likely does\n"
+        "2. Their most likely industry (e.g. FinTech, Healthcare AI, SaaS, "
+        "Cybersecurity, EdTech, Logistics, Manufacturing, etc.)\n\n"
+        "Respond ONLY in this exact format (no extra text):\n"
+        "DESCRIPTION: <1-2 sentences>\n"
+        "INDUSTRY: <industry>"
+    )
 
 
-def get_company_info_from_claude(client, company_name, job_title, job_description):
+def _parse_desc_industry(raw):
+    desc, industry = "", ""
+    for line in raw.splitlines():
+        if line.startswith("DESCRIPTION:"):
+            desc = line.replace("DESCRIPTION:", "").strip()
+        elif line.startswith("INDUSTRY:"):
+            industry = line.replace("INDUSTRY:", "").strip()
+    return desc, industry
+
+
+def get_company_info_from_ai(company_name, job_title, location=""):
+    """Use AI provider chain to generate company description + industry (no JD available)."""
+    prompt = _company_prompt(company_name, job_title, location)
+    raw = ai_generate(prompt, max_tokens=150)
+    if raw:
+        return _parse_desc_industry(raw)
+    return "", ""
+
+
+def get_company_info_from_jd(company_name, job_title, job_description):
+    """Extract company description + industry from a real job description."""
     prompt = (
         "Based on this job posting from '" + company_name + "', give me:\n"
         "1. A brief 1-2 sentence description of what this company does\n"
@@ -63,19 +60,10 @@ def get_company_info_from_claude(client, company_name, job_title, job_descriptio
         "DESCRIPTION: <1-2 sentences>\n"
         "INDUSTRY: <industry>"
     )
-    message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=200,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    raw = message.content[0].text.strip()
-    desc, industry = "", ""
-    for line in raw.splitlines():
-        if line.startswith("DESCRIPTION:"):
-            desc = line.replace("DESCRIPTION:", "").strip()
-        elif line.startswith("INDUSTRY:"):
-            industry = line.replace("INDUSTRY:", "").strip()
-    return desc, industry
+    raw = ai_generate(prompt, max_tokens=200)
+    if raw:
+        return _parse_desc_industry(raw)
+    return "", ""
 
 
 
@@ -150,21 +138,21 @@ def run(limit=50):
                 conn.commit()
                 scraped_count += 1
             else:
-                # Scraping failed — use Gemini to generate company description from name + title
-                print(" no JD found, asking Gemini...", end="", flush=True)
+                # Scraping failed — use AI chain to generate company description from name + title
+                print(" no JD found, asking AI...", end="", flush=True)
                 location = row["job_location"] if "job_location" in row.keys() else ""
-                gem_desc, gem_industry = get_company_info_from_gemini(
+                ai_desc, ai_industry = get_company_info_from_ai(
                     row["company_name"], row["job_title"] or "", location or ""
                 )
-                if gem_desc:
+                if ai_desc:
                     conn.execute(
                         "UPDATE leads SET company_description = COALESCE(NULLIF(company_description,''), ?), "
                         "company_industry = COALESCE(NULLIF(company_industry,''), ?), "
                         "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (gem_desc, gem_industry, row["id"])
+                        (ai_desc, ai_industry, row["id"])
                     )
                     conn.commit()
-                    print(f" -> {gem_industry or 'unknown'} [via Gemini]")
+                    print(f" -> {ai_industry or 'unknown'}")
                 else:
                     print(" failed")
                 failed_count += 1
@@ -193,40 +181,33 @@ def run(limit=50):
         print("")
         print(f"--- STEP 2: Filling company descriptions ({len(rows_needing_desc)} leads) ---")
 
-        if not ANTHROPIC_API_KEY:
-            print("ERROR: ANTHROPIC_API_KEY not set. Cannot fill descriptions.")
-        else:
-            import anthropic
-            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        for i, row in enumerate(rows_needing_desc):
+            prefix = "[" + str(i + 1) + "/" + str(len(rows_needing_desc)) + "] " + row["company_name"]
+            print(prefix + " ...", end="", flush=True)
 
-            for i, row in enumerate(rows_needing_desc):
-                prefix = "[" + str(i + 1) + "/" + str(len(rows_needing_desc)) + "] " + row["company_name"]
-                print(prefix + " ...", end="", flush=True)
-
-                try:
-                    desc, industry = get_company_info_from_claude(
-                        client,
-                        row["company_name"],
-                        row["job_title"] or "",
-                        row["job_description"]
+            try:
+                desc, industry = get_company_info_from_jd(
+                    row["company_name"],
+                    row["job_title"] or "",
+                    row["job_description"]
+                )
+                if desc:
+                    conn.execute(
+                        "UPDATE leads SET company_description = ?, company_industry = ?, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (desc, industry, row["id"])
                     )
-                    if desc:
-                        conn.execute(
-                            "UPDATE leads SET company_description = ?, company_industry = ?, "
-                            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                            (desc, industry, row["id"])
-                        )
-                        conn.commit()
-                        described_count += 1
-                        print(" -> " + (industry or "unknown industry"))
-                    else:
-                        desc_failed += 1
-                        print(" (no description extracted)")
-                except Exception as e:
+                    conn.commit()
+                    described_count += 1
+                    print(" -> " + (industry or "unknown industry"))
+                else:
                     desc_failed += 1
-                    print(" ERROR: " + str(e)[:50])
+                    print(" (no description extracted)")
+            except Exception as e:
+                desc_failed += 1
+                print(" ERROR: " + str(e)[:50])
 
-                time.sleep(0.5)
+            time.sleep(0.5)
 
         print("")
         print(f"Step 2 done: {described_count} filled, {desc_failed} failed")

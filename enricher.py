@@ -21,9 +21,10 @@ import socket
 import smtplib
 import requests
 import dns.resolver
-from config import GROQ_API_KEY, GROQ_MODEL, TARGET_TITLES, HUNTER_API_KEYS, ANTHROPIC_API_KEY
+from config import GROQ_API_KEY, GROQ_MODEL, TARGET_TITLES, HUNTER_API_KEYS
 from db import get_connection, get_leads_by_status, update_lead, get_stats
 from keywords import extract_keywords_string
+from ai_providers import generate as ai_generate
 
 
 # ============================================================
@@ -223,12 +224,7 @@ def scrape_company_pages(website_url):
 #  STEP 3: GROQ - Extract decision maker from scraped text
 # ============================================================
 def groq_extract_dm(company_name, site_text, emails_found):
-    if not GROQ_API_KEY:
-        return None
-    from groq import Groq
-
     emails_str = ", ".join(emails_found[:10]) if emails_found else "none"
-
     prompt = (
         "I scraped the website of '" + company_name + "'. "
         "Find the best senior person (CTO, CEO, Founder, VP Engineering, Head of AI, etc).\n\n"
@@ -241,23 +237,15 @@ def groq_extract_dm(company_name, site_text, emails_found):
         "Respond ONLY in JSON:\n"
         '{"first_name": "", "last_name": "", "title": "", "email": ""}'
     )
-
     try:
-        client = Groq(api_key=GROQ_API_KEY)
-        response = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": "Extract real people from website text. Never invent. JSON only."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.1, max_tokens=200,
-        )
-        raw = response.choices[0].message.content.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1]
-        if raw.endswith("```"):
-            raw = raw.rsplit("```", 1)[0]
-        result = json.loads(raw.strip())
+        raw = ai_generate(prompt, max_tokens=200,
+                          system="Extract real people from website text. Never invent. JSON only.")
+        if not raw:
+            return None
+        m = re.search(r'\{[^{}]*\}', raw, re.DOTALL)
+        if not m:
+            return None
+        result = json.loads(m.group(0))
         first = result.get("first_name", "").strip()
         last = result.get("last_name", "").strip()
         if first or result.get("email", "").strip():
@@ -411,107 +399,12 @@ def hunter_search(domain):
         return None
 
 
-# ============================================================
-#  CLAUDE FALLBACKS (used when Groq fails)
-# ============================================================
-def claude_extract_dm(company_name, site_text, emails_found):
-    if not ANTHROPIC_API_KEY:
-        return None
-    import anthropic
-
-    emails_str = ", ".join(emails_found[:10]) if emails_found else "none"
-    prompt = (
-        "I scraped the website of '" + company_name + "'. "
-        "Find the best senior person (CTO, CEO, Founder, VP Engineering, Head of AI, etc).\n\n"
-        "WEBSITE TEXT:\n" + (site_text[:2500] if site_text else "(none)") + "\n\n"
-        "EMAILS FOUND: " + emails_str + "\n\n"
-        "ONLY use names you can see in the text. Do NOT invent names.\n"
-        "If nothing useful, return empty strings.\n\n"
-        "Respond ONLY in JSON:\n"
-        '{"first_name": "", "last_name": "", "title": "", "email": ""}'
-    )
-    try:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        message = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=200,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = message.content[0].text.strip()
-        m = re.search(r'\{[^{}]*\}', raw, re.DOTALL)
-        if not m:
-            return None
-        result = json.loads(m.group(0))
-        first = result.get("first_name", "").strip()
-        if first or result.get("email", "").strip():
-            last = result.get("last_name", "").strip()
-            return {
-                "first_name": first,
-                "last_name": last,
-                "full_name": (first + " " + last).strip(),
-                "title": result.get("title", "").strip(),
-                "email": result.get("email", "").strip(),
-            }
-        return None
-    except Exception as e:
-        print(" claude err:" + str(e)[:40])
-        return None
-
-
-def claude_extract_company_info(company_name, site_text="", job_description="",
-                                job_title="", meta_descriptions=None, ddg_snippets=""):
-    if not ANTHROPIC_API_KEY:
-        return "", ""
-    import anthropic
-
-    parts = []
-    if meta_descriptions:
-        parts.append("Meta descriptions:\n" + "\n".join(meta_descriptions[:3]))
-    if ddg_snippets:
-        parts.append("Search snippets:\n" + ddg_snippets)
-    if site_text:
-        parts.append("Website text:\n" + site_text[:1500])
-    if job_description:
-        parts.append("Job posting:\n" + job_description[:500])
-    if not parts:
-        return "", ""
-
-    context = "\n\n".join(parts)
-    prompt = (
-        "From the real data below about '" + company_name + "', give:\n"
-        "1. Brief 1-2 sentence description of what they do\n"
-        "2. Industry (e.g. FinTech, Healthcare, SaaS, Cybersecurity, AI/ML, etc.)\n\n"
-        "ONLY use info from data below.\n\n"
-        "--- DATA ---\n" + context + "\n--- END ---\n\n"
-        'Respond ONLY in JSON: {"description": "...", "industry": "..."}'
-    )
-    try:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        message = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=200,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = message.content[0].text.strip()
-        m = re.search(r'\{[^{}]*\}', raw, re.DOTALL)
-        if not m:
-            return "", ""
-        result = json.loads(m.group(0))
-        return result.get("description", ""), result.get("industry", "")
-    except Exception as e:
-        print("    [Info] claude err:" + str(e)[:40])
-        return "", ""
-
 
 # ============================================================
 #  STEP 7: COMPANY INFO FROM REAL DATA
 # ============================================================
 def extract_company_info(company_name, site_text="", job_description="",
                          job_title="", meta_descriptions=None, ddg_snippets=""):
-    if not GROQ_API_KEY:
-        return "", ""
-    from groq import Groq
-
     parts = []
     if meta_descriptions:
         parts.append("Meta descriptions:\n" + "\n".join(meta_descriptions[:3]))
@@ -533,23 +426,14 @@ def extract_company_info(company_name, site_text="", job_description="",
         "--- DATA ---\n" + context + "\n--- END ---\n\n"
         'Respond ONLY in JSON: {"description": "...", "industry": "..."}'
     )
-
     try:
-        client = Groq(api_key=GROQ_API_KEY)
-        response = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": "Extract company info. JSON only."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.2, max_tokens=200,
-        )
-        raw = response.choices[0].message.content.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1]
-        if raw.endswith("```"):
-            raw = raw.rsplit("```", 1)[0]
-        result = json.loads(raw.strip())
+        raw = ai_generate(prompt, max_tokens=200, system="Extract company info. JSON only.")
+        if not raw:
+            return "", ""
+        m = re.search(r'\{[^{}]*\}', raw, re.DOTALL)
+        if not m:
+            return "", ""
+        result = json.loads(m.group(0))
         return result.get("description", ""), result.get("industry", "")
     except Exception as e:
         print("    [Info] err:" + str(e)[:40])
@@ -669,12 +553,9 @@ def enrich_lead(lead, seen_companies):
     dm_linkedin = lead.get("decision_maker_linkedin", "") or ""
 
     if need_email:
-        # ---- STEP 3: Groq extract decision maker (Claude fallback) ----
-        print("    [Groq] Finding DM...", end="")
+        # ---- STEP 3: AI chain — extract decision maker ----
+        print("    [AI] Finding DM...", end="")
         dm = groq_extract_dm(company, site_text, scraped_emails)
-        if not dm and ANTHROPIC_API_KEY:
-            print(" (Groq failed, trying Claude...)", end="")
-            dm = claude_extract_dm(company, site_text, scraped_emails)
 
         if dm:
             dm_name = dm.get("full_name", "") or dm_name
@@ -717,7 +598,7 @@ def enrich_lead(lead, seen_companies):
             else:
                 print(" no result")
 
-    # ---- STEP 7: Company description (only if missing, Claude fallback) ----
+    # ---- STEP 7: Company description (only if missing) ----
     desc = existing_desc
     industry = lead.get("company_industry", "") or ""
     if need_desc:
@@ -726,12 +607,6 @@ def enrich_lead(lead, seen_companies):
             lead.get("job_title", ""),
             meta_descriptions=meta_descs, ddg_snippets=ddg_snippets,
         )
-        if not desc and ANTHROPIC_API_KEY:
-            desc, industry = claude_extract_company_info(
-                company, site_text, lead.get("job_description", ""),
-                lead.get("job_title", ""),
-                meta_descriptions=meta_descs, ddg_snippets=ddg_snippets,
-            )
         if desc:
             print("    [Info] " + industry)
 

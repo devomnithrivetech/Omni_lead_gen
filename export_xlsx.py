@@ -1,4 +1,5 @@
 """Export leads to Excel with deduplication and clean columns."""
+import re
 import sqlite3
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -42,6 +43,13 @@ def export():
         print("No enriched leads to export.")
         conn.close()
         return
+
+    # Filter out Java (non-AI) jobs — safety net in case any slipped through scraper
+    _java_re = re.compile(r'\bjava\b', re.IGNORECASE)
+    before = len(rows)
+    rows = [r for r in rows if not (_java_re.search(r["job_title"] or "") and "javascript" not in (r["job_title"] or "").lower())]
+    if len(rows) < before:
+        print(f"Filtered out {before - len(rows)} Java job(s) from export.")
 
     # Deduplicate: keep only ONE row per company (the one with most data)
     seen = {}

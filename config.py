@@ -8,6 +8,15 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
+# --- Free Provider Keys (all OpenAI-compatible) ---
+# Get free keys at:
+#   Cerebras  → cloud.cerebras.ai      (1M tokens/day, no card)
+#   SambaNova → cloud.sambanova.ai     (unlimited rate-limited, no card)
+#   Together  → api.together.ai        ($25 free credit, no card)
+CEREBRAS_API_KEY  = os.getenv("CEREBRAS_API_KEY", "")
+SAMBANOVA_API_KEY = os.getenv("SAMBANOVA_API_KEY", "")
+TOGETHER_API_KEY  = os.getenv("TOGETHER_API_KEY", "")
+
 # Multiple Hunter.io API keys (optional, 25 free credits each)
 HUNTER_API_KEYS = []
 for i in range(1, 21):
@@ -106,12 +115,16 @@ BASE_URL = os.getenv("BASE_URL", "http://localhost:5000")
 def check_keys():
     print("")
     print("--- Config Status ---")
-    print("  GROQ_API_KEY: " + ("OK" if GROQ_API_KEY else "MISSING"))
-    print("  ANTHROPIC_API_KEY: " + ("OK (fallback active)" if ANTHROPIC_API_KEY else "not set (no fallback)"))
+    print("  GROQ_API_KEY:      " + ("OK" if GROQ_API_KEY else "MISSING"))
+    print("  ANTHROPIC_API_KEY: " + ("OK" if ANTHROPIC_API_KEY else "MISSING"))
+    print("  GEMINI_API_KEY:    " + ("OK" if GEMINI_API_KEY else "not set"))
+    print("  CEREBRAS_API_KEY:  " + ("OK" if CEREBRAS_API_KEY else "not set"))
+    print("  SAMBANOVA_API_KEY: " + ("OK" if SAMBANOVA_API_KEY else "not set"))
+    print("  TOGETHER_API_KEY:  " + ("OK" if TOGETHER_API_KEY else "not set"))
     if HUNTER_API_KEYS:
-        print("  HUNTER_API_KEYS: " + str(len(HUNTER_API_KEYS)) + " keys (~" + str(len(HUNTER_API_KEYS) * 25) + " credits)")
+        print("  HUNTER_API_KEYS:   " + str(len(HUNTER_API_KEYS)) + " keys (~" + str(len(HUNTER_API_KEYS) * 25) + " credits)")
     else:
-        print("  HUNTER_API_KEYS: none (free pipeline only)")
+        print("  HUNTER_API_KEYS:   none (free pipeline only)")
     print()
 
 
