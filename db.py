@@ -55,6 +55,10 @@ def init_db():
         ("company_industry", "TEXT"),
         ("tech_keywords", "TEXT"),
         ("salary", "TEXT"),
+        ("message_id", "TEXT"),
+        ("sent_at", "TEXT"),
+        ("opened_at", "TEXT"),
+        ("replied_at", "TEXT"),
     ]:
         try:
             c.execute("ALTER TABLE leads ADD COLUMN " + col_name + " " + col_type)
@@ -108,6 +112,14 @@ def update_lead(lead_id, **fields):
     conn.close()
 
 
+def get_existing_companies():
+    """Return a set of all company_name values already in the DB (any status)."""
+    conn = get_connection()
+    rows = conn.execute("SELECT DISTINCT company_name FROM leads").fetchall()
+    conn.close()
+    return {r["company_name"].strip().lower() for r in rows}
+
+
 def get_all_leads():
     conn = get_connection()
     rows = conn.execute(
@@ -134,6 +146,49 @@ def get_stats():
     print("----------------------")
     print("")
     return {r["status"]: r["count"] for r in rows}
+
+
+def mark_sent(lead_id, message_id):
+    update_lead(lead_id, status="sent", message_id=message_id,
+                sent_at=datetime.now().isoformat())
+
+
+def mark_opened(lead_id):
+    conn = get_connection()
+    row = conn.execute("SELECT status FROM leads WHERE id = ?", (lead_id,)).fetchone()
+    conn.close()
+    if row and row["status"] not in ("replied",):
+        update_lead(lead_id, status="opened", opened_at=datetime.now().isoformat())
+
+
+def mark_replied(lead_id):
+    update_lead(lead_id, status="replied", replied_at=datetime.now().isoformat())
+
+
+def get_lead_by_id(lead_id):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM leads WHERE id = ?", (lead_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_lead_by_message_id(message_id):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM leads WHERE message_id = ?", (message_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_lead_by_email(email):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM leads WHERE decision_maker_email = ? AND status = 'sent'",
+        (email,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 # Auto-initialize on import

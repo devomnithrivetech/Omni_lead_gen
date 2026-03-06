@@ -12,7 +12,7 @@ from config import (
     SEARCH_QUERIES, SEARCH_LOCATIONS, TIME_FILTER,
     MAX_PAGES_PER_QUERY, MIN_DELAY, MAX_DELAY, MAX_LEADS_PER_RUN,
 )
-from db import insert_lead, get_stats
+from db import insert_lead, get_stats, get_existing_companies
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +298,10 @@ def run_scraper():
     print("(Will stop at " + str(MAX_LEADS_PER_RUN) + " leads or when done)")
     print("")
 
+    existing_companies = get_existing_companies()
+    print("Companies already in DB (will skip): " + str(len(existing_companies)))
+    print("")
+
     total_new = 0
     total_skip = 0
 
@@ -309,6 +313,9 @@ def run_scraper():
         jobs = scrape_linkedin_jobs(query, location)
 
         for job in jobs:
+            if job["company_name"].strip().lower() in existing_companies:
+                total_skip += 1
+                continue
             inserted = insert_lead(
                 company_name=job["company_name"],
                 job_title=job["job_title"],
@@ -320,6 +327,7 @@ def run_scraper():
             )
             if inserted:
                 total_new += 1
+                existing_companies.add(job["company_name"].strip().lower())
                 msg = "  + " + job["company_name"] + " -- " + job["job_title"]
                 if job["job_location"]:
                     msg += " (" + job["job_location"] + ")"

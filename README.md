@@ -1,6 +1,6 @@
 # Omnithrive Lead Generation Pipeline
 
-An AI-powered B2B lead generation system that scrapes LinkedIn job postings, filters for genuine AI roles, finds decision maker contacts, and generates formal personalized cold emails — all automatically.
+An AI-powered B2B lead generation system that scrapes LinkedIn job postings, filters for genuine AI roles, finds decision maker contacts, generates formal personalized cold emails, and sends + tracks them through a web dashboard — all automated.
 
 Built for **Omnithrive Technologies** to target companies actively hiring AI engineers (a strong buying signal for AI services).
 
@@ -32,13 +32,16 @@ LinkedIn Jobs
      |  Strict 230-250 word limit enforced in prompt
      |  "Dear [Name]," or "Dear [Company] Team," salutation, stat hook, Warm regards closing
      v
-[4] EXPORT        export_xlsx.py
-     |  Exports to leads_export.xlsx (deduplicated by company)
-     |  Columns: company, description, industry, job title, location,
-     |           salary, tech keywords, DM name/title/email/LinkedIn,
-     |           job description, email subject, draft email
+[4] DASHBOARD     server.py  →  http://localhost:5000
+     |  Review drafted emails, click "Send" per lead
+     |  email_sender.py sends via SMTP (multipart/alternative — looks hand-typed)
+     |  Open tracking: 1x1 ghost pixel in the HTML part
+     |  Reply tracking: IMAP poller matches replies → updates status
      v
-leads_export.xlsx  (ready to use for outreach)
+[5] EXPORT        export_xlsx.py  (optional — DB is the source of truth)
+     |  Exports to leads_export.xlsx (deduplicated by company)
+     v
+leads_export.xlsx  (optional backup / offline review)
 ```
 
 ---
@@ -48,12 +51,12 @@ leads_export.xlsx  (ready to use for outreach)
 | File | Purpose |
 |---|---|
 | `run.py` | Master runner — full pipeline or individual stages |
-| `config.py` | All settings: API keys, search queries, locations, limits |
-| `db.py` | SQLite database layer — schema, insert, update, stats |
+| `config.py` | All settings: API keys, SMTP/IMAP, search queries, limits |
+| `db.py` | SQLite database layer — schema, insert, update, tracking helpers |
 | `scraper.py` | LinkedIn scraper with Java/relevance filter + JD fetcher |
 | `enricher.py` | Contact + company enrichment waterfall (Groq + Claude fallback) |
 | `drafter.py` | Basic Groq-based email drafter (used by `run.py draft`) |
-| `draft_emails.py` | Formal Claude Sonnet email drafter — recommended |
+| `draft_emails.py` | Formal Claude Haiku email drafter — recommended |
 | `redraft_all.py` | Overwrites ALL existing emails with updated prompt |
 | `keywords.py` | 400+ AI/ML/tech keyword extractor (11 categories) |
 | `export_xlsx.py` | Formatted Excel export with deduplication + auto-filter |
@@ -62,6 +65,10 @@ leads_export.xlsx  (ready to use for outreach)
 | `fill_descriptions.py` | Backfill company descriptions via Claude Haiku |
 | `fill_salaries.py` | Extract salary info (regex + Claude) |
 | `rescrape_descriptions.py` | Re-scrape job URLs for missing descriptions |
+| **`server.py`** | **Flask dashboard server + REST API + open-tracking pixel** |
+| **`email_sender.py`** | **Deliverability-optimised SMTP sender (multipart/alternative)** |
+| **`reply_tracker.py`** | **IMAP inbox poller — auto-marks replied leads in DB** |
+| **`templates/dashboard.html`** | **Frontend CRM dashboard (metrics bar + lead table + send UI)** |
 
 ---
 
@@ -92,7 +99,11 @@ leads
   draft_email             TEXT       -- generated email body
   draft_linkedin_note     TEXT       -- LinkedIn connection note
   tech_keywords           TEXT       -- comma-separated AI/tech stack
-  status                  TEXT       -- scraped | enriched | drafted | no_match
+  status                  TEXT       -- scraped | enriched | drafted | sent | opened | replied
+  message_id              TEXT       -- SMTP Message-ID for reply matching
+  sent_at                 TEXT       -- ISO timestamp when email was sent
+  opened_at               TEXT       -- ISO timestamp of first open
+  replied_at              TEXT       -- ISO timestamp of first reply
   created_at              TEXT
   updated_at              TEXT
 ```
@@ -107,8 +118,11 @@ Unique constraint on `(company_name, job_title)` prevents duplicates across runs
 |---|---|
 | `scraped` | Found on LinkedIn, not yet enriched |
 | `enriched` | Website + decision maker found |
-| `drafted` | Email generated (via drafter.py) |
+| `drafted` | Email generated, ready to send |
 | `no_match` | Could not find website/contact — permanently skipped on future runs |
+| `sent` | Email dispatched via SMTP |
+| `opened` | Recipient opened the email (tracking pixel fired) |
+| `replied` | Recipient replied (detected via IMAP) |
 
 ---
 
@@ -189,7 +203,27 @@ ANTHROPIC_API_KEY=your_anthropic_key
 HUNTER_API_KEY=key1
 HUNTER_API_KEY_2=key2
 HUNTER_API_KEY_3=key3
+
+# --- Email Sending (Module 1) ---
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=admin@omnithrivetech.com
+SMTP_PASS=your_app_password        # Gmail: use an App Password, not your main password
+FROM_EMAIL=admin@omnithrivetech.com
+FROM_NAME=Omnithrive
+
+# --- Reply Tracking (Module 2) ---
+IMAP_HOST=imap.gmail.com
+IMAP_PORT=993
+IMAP_USER=admin@omnithrivetech.com
+IMAP_PASS=your_app_password
+
+# --- Dashboard (Module 3) ---
+SERVER_PORT=5000
+BASE_URL=https://your-public-domain.com   # Public URL — required for tracking pixels to fire
 ```
+
+> **Gmail note**: Enable 2FA and create a 16-character App Password at myaccount.google.com/apppasswords. Use that as `SMTP_PASS` and `IMAP_PASS`. For the tracking pixel to fire on recipients' email clients, `BASE_URL` must be a publicly reachable URL (not `localhost`).
 
 ### 3. Run
 
@@ -204,7 +238,7 @@ python run.py stats    # Show DB statistics
 python run.py review   # Preview drafted emails in terminal
 python run.py export   # Export to Excel
 
-# Recommended email drafting (formal, Claude Sonnet)
+# Recommended email drafting (formal, Claude Haiku)
 python draft_emails.py      # Draft only new leads (no existing email)
 python redraft_all.py       # Redraft ALL leads with latest prompt
 
@@ -214,6 +248,10 @@ python fill_keywords.py          # Add AI/tech keywords (no API cost)
 python fill_descriptions.py      # Fill company descriptions via Claude Haiku
 python fill_salaries.py          # Extract salary from JDs (regex + Claude)
 python export_xlsx.py            # Re-export Excel anytime
+
+# --- Dashboard + Email Sending (NEW) ---
+python server.py                 # Start the web dashboard → http://localhost:5000
+python reply_tracker.py          # One-shot inbox check (also runs automatically inside server.py)
 ```
 
 ---
@@ -321,6 +359,10 @@ python redraft_all.py
 | AI (company desc fallback) | Gemini 2.0 Flash Lite (free tier, no billing required) |
 | AI (email drafting) | Claude Haiku 4.5 (cheapest, fastest) |
 | Email finding | DuckDuckGo + SMTP verification + Hunter.io |
+| **Email sending** | **Python smtplib + STARTTLS (multipart/alternative)** |
+| **Open tracking** | **1×1 transparent GIF pixel served by Flask** |
+| **Reply tracking** | **Python imaplib IMAP4_SSL polling (5-min interval)** |
+| **Dashboard** | **Flask 3 (backend) + vanilla HTML/CSS/JS (frontend)** |
 | Export | openpyxl (styled Excel with freeze panes + auto-filter) |
 | Config | python-dotenv |
 
@@ -367,6 +409,47 @@ For 150 leads: approximately $0.50–$1.00 total in API costs (switched to Haiku
 
 ---
 
+## Dashboard & Sending — Quick Start
+
+```bash
+# 1. Add SMTP / IMAP / BASE_URL to .env (see Setup section above)
+# 2. Make sure leads have been drafted
+python draft_emails.py
+
+# 3. Launch the dashboard
+source venv/bin/activate
+python server.py
+# → open http://localhost:5000
+```
+
+The dashboard auto-refreshes every 60 seconds. To send an email: find the lead row, click **Review & Send**, review the full email in the modal, confirm.
+
+Reply tracking runs automatically as a background thread inside `server.py` (polls inbox every 5 minutes). To run it standalone:
+
+```bash
+python reply_tracker.py
+```
+
+---
+
+## Email Deliverability Design
+
+Every outbound email is sent with `multipart/alternative` structure:
+
+```
+multipart/alternative
+  ├─ text/plain   ← the actual email (what recipients read)
+  └─ text/html    ← ghost version: zero CSS, zero styling
+                    same plain text + 1×1 invisible tracking pixel
+```
+
+- **No HTML templates, no inline styles** — the ghost HTML is just raw text wrapped in `<html><body>` with `<br>` line breaks
+- **Plain-text signature only**: `Omnithrive` (no image logos)
+- Email clients that render HTML load the tracking pixel silently; plain-text clients show the text version only
+- The `Message-ID` header is stored in the DB and used to match reply threads
+
+---
+
 ## What's Been Added (Topic-by-Topic)
 
 ### Scraper Improvements
@@ -407,3 +490,26 @@ For 150 leads: approximately $0.50–$1.00 total in API costs (switched to Haiku
 ### Configuration
 - `GEMINI_API_KEY` added to `config.py` and `.env`
 - All three AI providers configurable via `.env`: Groq, Anthropic, Gemini
+
+### Email Sending — Module 1 (`email_sender.py`)
+- `multipart/alternative` email construction — primary payload is strict `text/plain`
+- Ghost `text/html` part: zero CSS, zero styling, raw text + 1×1 tracking pixel only
+- Plain-text signature appended: `Omnithrive` (no image logos, no HTML branding)
+- STARTTLS SMTP with configurable `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`
+- `Message-ID` generated via `email.utils.make_msgid` and stored to DB on send
+
+### Tracking Engine — Module 2 (`reply_tracker.py` + `db.py` + `server.py`)
+- **New DB columns**: `message_id`, `sent_at`, `opened_at`, `replied_at` (migration-safe)
+- **New statuses**: `sent` → `opened` → `replied` (status never regresses)
+- **Open tracking**: `GET /api/track/open/<lead_id>` serves a 1×1 transparent GIF (`image/gif`, no-cache headers) and calls `mark_opened()`
+- **Reply tracking**: IMAP4_SSL poller runs as a daemon thread, checks `UNSEEN` messages every 5 minutes. Match priority: `In-Reply-To`/`References` header → sender email fallback
+- **New DB helpers**: `mark_sent`, `mark_opened`, `mark_replied`, `get_lead_by_id`, `get_lead_by_message_id`, `get_lead_by_email`
+
+### Frontend Dashboard — Module 3 (`server.py` + `templates/dashboard.html`)
+- **REST API** (`/api/leads`, `/api/stats`, `/api/leads/<id>/send`) served by Flask 3
+- **Metrics bar**: Scraped / Enriched / Sent / Opened / Replied / No Reply — live from DB
+- **Lead table**: Company + recipient email, Job Title, Keywords, JD Snippet, Drafted Email preview, Status badge, "Review & Send" action button
+- **Review modal**: full To / Subject / Body visible before confirming send
+- Search bar (company, keywords, email, body) and status dropdown filter
+- Auto-refresh every 60 seconds; toast notifications for send success/error
+- Dark theme, zero dependencies — single HTML file, no npm/webpack needed
