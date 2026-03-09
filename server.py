@@ -12,7 +12,9 @@ Start: python server.py
 """
 import base64
 import logging
-import os
+import random
+import threading
+import time as _time
 
 from flask import Flask, jsonify, request, send_from_directory
 
@@ -21,10 +23,80 @@ from db import get_all_leads, get_lead_by_id, mark_opened
 from email_sender import send_email
 from reply_tracker import start_background_thread
 
+# ---------------------------------------------------------------------------
+# Bulk Send State
+# ---------------------------------------------------------------------------
+_bulk_state = {
+    "running": False, "total": 0, "sent": 0, "failed": 0,
+    "current": "", "done": False, "stop_requested": False, "errors": [],
+}
+_bulk_lock = threading.Lock()
+
+
+def _bulk_send_worker(lead_ids, delay_min, delay_max, daily_cap):
+    global _bulk_state
+    sent = 0
+    failed = 0
+
+    for i, lead_id in enumerate(lead_ids):
+        with _bulk_lock:
+            if _bulk_state["stop_requested"]:
+                break
+        if sent >= daily_cap:
+            break
+
+        lead = get_lead_by_id(lead_id)
+        if not lead:
+            continue
+
+        # Skip if already sent (e.g. sent individually while bulk was running)
+        if lead.get("status") in ("sent", "opened", "replied"):
+            with _bulk_lock:
+                _bulk_state["total"] = max(0, _bulk_state["total"] - 1)
+            continue
+
+        company = lead.get("company_name", "")
+        with _bulk_lock:
+            _bulk_state["current"] = "Sending to " + company + "..."
+
+        try:
+            send_email(lead)
+            sent += 1
+            with _bulk_lock:
+                _bulk_state["sent"] = sent
+            logger.info("Bulk send: sent lead_id=%d company=%s", lead_id, company)
+        except Exception as e:
+            failed += 1
+            with _bulk_lock:
+                _bulk_state["failed"] = failed
+                _bulk_state["errors"].append(company + ": " + str(e)[:60])
+            logger.error("Bulk send error lead_id=%d: %s", lead_id, e)
+
+        # Human-like delay between sends (skip after last)
+        if i < len(lead_ids) - 1:
+            with _bulk_lock:
+                stop = _bulk_state["stop_requested"]
+            if stop:
+                break
+            delay = random.randint(delay_min, delay_max)
+            with _bulk_lock:
+                _bulk_state["current"] = "Waiting " + str(delay) + "s before next..."
+            _time.sleep(delay)
+
+    with _bulk_lock:
+        _bulk_state["running"] = False
+        _bulk_state["done"] = True
+        _bulk_state["current"] = ""
+
+import sys as _sys
+if hasattr(_sys.stdout, "reconfigure"):
+    _sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(_sys.stderr, "reconfigure"):
+    _sys.stderr.reconfigure(encoding="utf-8")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    encoding="utf-8",
 )
 logger = logging.getLogger(__name__)
 
@@ -151,6 +223,67 @@ def track_open(lead_id):
             "Pragma": "no-cache",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# API: Bulk Send
+# ---------------------------------------------------------------------------
+
+@app.route("/api/bulk-send/start", methods=["POST"])
+def api_bulk_start():
+    global _bulk_state
+    with _bulk_lock:
+        if _bulk_state["running"]:
+            return jsonify({"error": "Bulk send already running"}), 400
+
+    data = request.get_json(silent=True) or {}
+    delay_min = max(30, int(data.get("delay_min", 45)))
+    delay_max = max(delay_min + 10, int(data.get("delay_max", 90)))
+    daily_cap = min(100, max(1, int(data.get("daily_cap", 50))))
+
+    leads = get_all_leads()
+    drafted = [
+        l for l in leads
+        if l.get("status") == "drafted"
+        and (l.get("decision_maker_email") or "").strip()
+        and (l.get("draft_email") or "").strip()
+    ]
+
+    if not drafted:
+        return jsonify({"error": "No drafted leads ready to send"}), 400
+
+    lead_ids = [l["id"] for l in drafted]
+    cap = min(len(lead_ids), daily_cap)
+
+    with _bulk_lock:
+        _bulk_state.update({
+            "running": True, "total": cap, "sent": 0, "failed": 0,
+            "current": "Starting...", "done": False,
+            "stop_requested": False, "errors": [],
+        })
+
+    t = threading.Thread(
+        target=_bulk_send_worker,
+        args=(lead_ids, delay_min, delay_max, daily_cap),
+        daemon=True, name="BulkSender",
+    )
+    t.start()
+    logger.info("Bulk send started: %d leads, delay=%d-%ds, cap=%d", cap, delay_min, delay_max, daily_cap)
+    return jsonify({"ok": True, "total": cap})
+
+
+@app.route("/api/bulk-send/status")
+def api_bulk_status():
+    with _bulk_lock:
+        return jsonify(dict(_bulk_state))
+
+
+@app.route("/api/bulk-send/stop", methods=["POST"])
+def api_bulk_stop():
+    with _bulk_lock:
+        _bulk_state["stop_requested"] = True
+    logger.info("Bulk send stop requested.")
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------

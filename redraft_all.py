@@ -27,6 +27,7 @@ def run():
         """SELECT * FROM leads
            WHERE decision_maker_email IS NOT NULL
            AND decision_maker_email != ''
+           AND status NOT IN ('sent', 'opened', 'replied')
            ORDER BY company_name"""
     ).fetchall()
 
@@ -72,7 +73,7 @@ def run():
             if subject and body:
                 conn.execute(
                     "UPDATE leads SET draft_subject = ?, draft_email = ?, "
-                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    "status = 'drafted', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (subject, body, lead["id"])
                 )
                 conn.commit()

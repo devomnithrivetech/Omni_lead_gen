@@ -1,5 +1,4 @@
 import sqlite3
-import os
 from datetime import datetime
 from config import DB_PATH
 
@@ -184,7 +183,7 @@ def get_lead_by_message_id(message_id):
 def get_lead_by_email(email):
     conn = get_connection()
     row = conn.execute(
-        "SELECT * FROM leads WHERE decision_maker_email = ? AND status = 'sent'",
+        "SELECT * FROM leads WHERE decision_maker_email = ? AND status IN ('sent', 'opened')",
         (email,)
     ).fetchone()
     conn.close()
